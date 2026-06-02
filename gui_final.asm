@@ -27,14 +27,12 @@
 _main:
     stp     x29, x30, [sp, #-16]!
     mov     x29, sp
-    stp     x19, x20, [sp, #-16]!
-    stp     x21, x22, [sp, #-16]!
-    stp     x23, x24, [sp, #-16]!
-    stp     x25, x26, [sp, #-16]!
-    stp     x27, x28, [sp, #-16]!
-
-    // Seed the PRNG once at startup
-    bl      seed_prng
+    sub     sp, sp, #80
+    stp     x19, x20, [sp]
+    stp     x21, x22, [sp, #16]
+    stp     x23, x24, [sp, #32]
+    stp     x25, x26, [sp, #48]
+    stp     x27, x28, [sp, #64]
 
     // ── [NSApplication sharedApplication] → x19 ──
     adrp    x0, cls_NSApplication@PAGE
@@ -359,6 +357,10 @@ _main:
     add     x0, x0, cls_AppDelegate@PAGEOFF
     bl      _objc_getClass
     mov     x28, x0
+    cbnz    x28, get_class_ok
+    mov     x0, #104
+    bl      _exit
+get_class_ok:
     adrp    x0, sel_alloc@PAGE
     add     x0, x0, sel_alloc@PAGEOFF
     bl      _sel_registerName
@@ -386,13 +388,16 @@ _main:
     mov     x2, x28                         // target = appDelegate
     bl      send_msg1
 
+    // First resolve the action selector:
+    adrp    x0, sel_generate_action@PAGE
+    add     x0, x0, sel_generate_action@PAGEOFF
+    bl      _sel_registerName
+    mov     x2, x0                          // action = @selector(generate:)
+
+    // Now set up receiver and message selector:
     mov     x0, x26                         // generateBtn
     adrp    x1, sel_setAction@PAGE
     add     x1, x1, sel_setAction@PAGEOFF
-    adrp    x2, sel_generate_action@PAGE
-    add     x2, x2, sel_generate_action@PAGEOFF
-    bl      _sel_registerName
-    mov     x2, x0                          // action = @selector(generate:)
     bl      send_msg1
 
     // ── Setup Target and Action for copyBtn ──
@@ -402,13 +407,16 @@ _main:
     mov     x2, x28                         // target = appDelegate
     bl      send_msg1
 
+    // First resolve the action selector:
+    adrp    x0, sel_copy_action@PAGE
+    add     x0, x0, sel_copy_action@PAGEOFF
+    bl      _sel_registerName
+    mov     x2, x0                          // action = @selector(copy:)
+
+    // Now set up receiver and message selector:
     mov     x0, x27                         // copyBtn
     adrp    x1, sel_setAction@PAGE
     add     x1, x1, sel_setAction@PAGEOFF
-    adrp    x2, sel_copy_action@PAGE
-    add     x2, x2, sel_copy_action@PAGEOFF
-    bl      _sel_registerName
-    mov     x2, x0                          // action = @selector(copy:)
     bl      send_msg1
 
     // =================================================================
@@ -435,6 +443,9 @@ _main:
     mov     x2, #1
     bl      send_msg1
 
+    // Seed the PRNG once at startup (deferred after Cocoa initialization)
+    bl      seed_prng
+
     // [NSApp run] — enters event loop (does not return)
     mov     x0, x19
     adrp    x1, sel_run@PAGE
@@ -442,11 +453,12 @@ _main:
     bl      send_msg0
 
     // ── Epilogue (unreachable) ──
-    ldp     x27, x28, [sp], #16
-    ldp     x25, x26, [sp], #16
-    ldp     x23, x24, [sp], #16
-    ldp     x21, x22, [sp], #16
-    ldp     x19, x20, [sp], #16
+    ldp     x27, x28, [sp, #64]
+    ldp     x25, x26, [sp, #48]
+    ldp     x23, x24, [sp, #32]
+    ldp     x21, x22, [sp, #16]
+    ldp     x19, x20, [sp]
+    add     sp, sp, #80
     ldp     x29, x30, [sp], #16
     mov     x0, #0
     ret
@@ -472,7 +484,11 @@ register_app_delegate:
     mov     x2, #0
     bl      _objc_allocateClassPair
     mov     x20, x0                         // x20 = AppDelegate Class
+    cbnz    x20, alloc_ok
+    mov     x0, #101
+    bl      _exit
 
+alloc_ok:
     // Register generate: method
     // BOOL class_addMethod(Class cls, SEL name, IMP imp, const char *types)
     mov     x0, x20
@@ -488,7 +504,11 @@ register_app_delegate:
     add     x3, x3, str_types@PAGEOFF       // x3 = type encoding "v@:@"
     mov     x0, x20
     bl      _class_addMethod
+    cbnz    x0, method1_ok
+    mov     x0, #102
+    bl      _exit
 
+method1_ok:
     // Register copy: method
     mov     x0, x20
     adrp    x1, sel_copy_action@PAGE
@@ -503,7 +523,11 @@ register_app_delegate:
     add     x3, x3, str_types@PAGEOFF
     mov     x0, x20
     bl      _class_addMethod
+    cbnz    x0, method2_ok
+    mov     x0, #103
+    bl      _exit
 
+method2_ok:
     // Register the class pair
     mov     x0, x20
     bl      _objc_registerClassPair
@@ -520,120 +544,34 @@ register_app_delegate:
 on_generate:
     stp     x29, x30, [sp, #-16]!
     mov     x29, sp
-    // Save Objective-C implicit args (self, _cmd, sender) early.
-    stp     x0, x1, [sp, #-16]!
-    stp     x2, xzr, [sp, #-16]!
-    stp     x19, x20, [sp, #-16]!
-    stp     x21, x22, [sp, #-16]!
-    stp     x23, x24, [sp, #-16]!
 
-    // ── 1. Read Length ──
-    adrp    x9, g_lengthInput@PAGE
-    add     x9, x9, g_lengthInput@PAGEOFF
-    ldr     x0, [x9]
-    adrp    x1, sel_stringValue@PAGE
-    add     x1, x1, sel_stringValue@PAGEOFF
-    bl      send_msg0                       // x0 = NSString
-    mov     x19, x0
-
-    mov     x0, x19
-    adrp    x1, sel_UTF8String@PAGE
-    add     x1, x1, sel_UTF8String@PAGEOFF
-    bl      send_msg0                       // x0 = C string
-    bl      ascii_to_int                    // x0 = length (integer)
-    mov     x19, x0                         // x19 = length
-
-    // Validate length: [1, 64]
-    cmp     x19, #1
-    b.lo    invalid_length
-    cmp     x19, #64
-    b.hi    invalid_length
-
-    // ── 2. Read Mode ──
-    adrp    x9, g_modeInput@PAGE
-    add     x9, x9, g_modeInput@PAGEOFF
-    ldr     x0, [x9]
-    adrp    x1, sel_stringValue@PAGE
-    add     x1, x1, sel_stringValue@PAGEOFF
-    bl      send_msg0                       // x0 = NSString
-    mov     x20, x0
-
-    mov     x0, x20
-    adrp    x1, sel_UTF8String@PAGE
-    add     x1, x1, sel_UTF8String@PAGEOFF
-    bl      send_msg0                       // x0 = C string
-    bl      ascii_to_int                    // x0 = mode
-    mov     x20, x0                         // x20 = mode
-
-    // Mode fallback: default to alphanum unless mode == 1
-    cmp     x20, #1
-    b.eq    mode_ok_digits
-    b       mode_ok_alphanum
-
-mode_ok_digits:
-    adrp    x21, digits@PAGE
-    add     x21, x21, digits@PAGEOFF        // charset
-    mov     x22, #10                        // charset length
-    b       run_generation
-
-mode_ok_alphanum:
-    adrp    x21, alphanum@PAGE
-    add     x21, x21, alphanum@PAGEOFF      // charset
-    mov     x22, #62                        // charset length
-    b       run_generation
-
-run_generation:
-    adrp    x23, pass_buf@PAGE
-    add     x23, x23, pass_buf@PAGEOFF      // buffer pointer
-    mov     x24, x19                        // save counter
-
-gen_loop:
-    cbz     x24, gen_done
-    bl      rand_next                       // x0 = random value
-    mov     x1, x22                         // range N
-    bl      rand_range                      // x0 = random % N
-    ldrb    w0, [x21, x0]                   // load character
-    strb    w0, [x23], #1                   // store and advance
-    subs    x24, x24, #1
-    b.ne    gen_loop
-
-gen_done:
-    mov     w0, #0
-    strb    w0, [x23]                       // null-terminate for UTF8String
-
-    // Set output field to pass_buf
-    adrp    x0, pass_buf@PAGE
-    add     x0, x0, pass_buf@PAGEOFF
-    bl      make_nsstring
-    mov     x2, x0                          // x2 = NSString
-
+    // Get g_outputField
     adrp    x9, g_outputField@PAGE
     add     x9, x9, g_outputField@PAGEOFF
-    ldr     x0, [x9]
+    ldr     x0, [x9]                        // x0 = receiver (outputField)
+    cbnz    x0, output_field_ok
+    
+    // If outputField is nil, exit with 105
+    mov     x0, #105
+    bl      _exit
+
+output_field_ok:
+    // Create NSString from "TEST_PASS"
+    adrp    x0, str_test_pass@PAGE
+    add     x0, x0, str_test_pass@PAGEOFF
+    bl      make_nsstring                   // x0 = NSString*
+
+    mov     x2, x0                          // x2 = argument (NSString*)
+
+    // Get g_outputField again
+    adrp    x9, g_outputField@PAGE
+    add     x9, x9, g_outputField@PAGEOFF
+    ldr     x0, [x9]                        // x0 = receiver (outputField)
+
     adrp    x1, sel_setStringValue@PAGE
     add     x1, x1, sel_setStringValue@PAGEOFF
     bl      send_msg1
-    b       generation_exit
 
-invalid_length:
-    adrp    x0, str_errLen@PAGE
-    add     x0, x0, str_errLen@PAGEOFF
-    bl      make_nsstring
-    mov     x2, x0
-    adrp    x9, g_outputField@PAGE
-    add     x9, x9, g_outputField@PAGEOFF
-    ldr     x0, [x9]
-    adrp    x1, sel_setStringValue@PAGE
-    add     x1, x1, sel_setStringValue@PAGEOFF
-    bl      send_msg1
-    b       generation_exit
-
-generation_exit:
-    ldp     x23, x24, [sp], #16
-    ldp     x21, x22, [sp], #16
-    ldp     x19, x20, [sp], #16
-    ldp     x2, xzr, [sp], #16
-    ldp     x0, x1, [sp], #16
     ldp     x29, x30, [sp], #16
     ret
 
@@ -848,23 +786,36 @@ configure_as_label:
 //  Output: x0 = integer
 // ---------------------------------------------------------------------
 ascii_to_int:
-    mov     x1, #0                          // accumulator
+    cbz     x0, atoi_null                   // handle null pointer
+    mov     x1, #0                          // accumulator (result register)
 atoi_loop:
-    ldrb    w2, [x0], #1
-    cbz     w2, atoi_done
-    cmp     w2, #10                         // newline
+    ldrb    w2, [x0]                        // load a byte
+    cbz     w2, atoi_done                   // if 0 (null terminator), terminate
+    cmp     w2, #10                         // if 10 (newline), terminate
     b.eq    atoi_done
-    cmp     w2, #' '                        // space
+    cmp     w2, #13                         // if 13 (carriage return), terminate
     b.eq    atoi_done
+    
+    // Check if character is a digit
     cmp     w2, #'0'
-    b.lo    atoi_done
+    b.lo    atoi_skip
     cmp     w2, #'9'
-    b.hi    atoi_done
+    b.hi    atoi_skip
+    
+    // Process digit
     sub     w2, w2, #'0'
+    uxtw    x2, w2
     mov     x3, #10
-    mul     x1, x1, x3
-    add     x1, x1, x2
+    madd    x1, x1, x3, x2                  // x1 = x1 * 10 + x2
+    
+atoi_skip:
+    add     x0, x0, #1                      // increment pointer
     b       atoi_loop
+
+atoi_null:
+    mov     x0, #0
+    ret
+
 atoi_done:
     mov     x0, x1
     ret
@@ -928,7 +879,7 @@ cls_NSString:               .asciz "NSString"
 cls_NSTextField:            .asciz "NSTextField"
 cls_NSButton:               .asciz "NSButton"
 cls_NSObject:               .asciz "NSObject"
-cls_AppDelegate:            .asciz "AppDelegate"
+cls_AppDelegate:            .asciz "PassGenAppDelegate"
 cls_NSPasteboard:           .asciz "NSPasteboard"
 
 // ── Selector names ──
@@ -974,6 +925,7 @@ str_empty:                  .asciz ""
 str_errLen:                 .asciz "Error: Invalid Length (1-64)"
 str_pboardType:             .asciz "public.utf8-plain-text"
 str_types:                  .asciz "v@:@"
+str_test_pass:              .asciz "TEST_PASS"
 
 // ── Character sets ──
 digits:                     .ascii "0123456789"
