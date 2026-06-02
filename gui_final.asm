@@ -1,13 +1,13 @@
-// gui_stage3.asm — Phase 3: App + Window + UI Elements + Logic (PRNG & Copy/Paste)
+// gui_final.asm — Final: App + Window + UI Elements + Logic (PRNG & Copy/Paste)
 // macOS ARM64 (Apple Silicon) — Pure Assembly Cocoa Application
 //
 // Build:
-//   as -o gui_stage3.o gui_stage3.asm
-//   ld -o gui_stage3 gui_stage3.o -lSystem -framework Cocoa \
+//   as -o gui_final.o gui_final.asm
+//   ld -o gui_final gui_final.o -lSystem -framework Cocoa \
 //      -syslibroot $(xcrun -sdk macosx --show-sdk-path) -arch arm64 -e _main
 //
 // Run:
-//   ./gui_stage3
+//   ./gui_final
 //
 
 .section __TEXT,__text,regular,pure_instructions
@@ -565,12 +565,10 @@ on_generate:
     bl      ascii_to_int                    // x0 = mode
     mov     x20, x0                         // x20 = mode
 
-    // Validate mode: 1 or 2
+    // Mode fallback: default to alphanum unless mode == 1
     cmp     x20, #1
     b.eq    mode_ok_digits
-    cmp     x20, #2
-    b.eq    mode_ok_alphanum
-    b       invalid_mode
+    b       mode_ok_alphanum
 
 mode_ok_digits:
     adrp    x21, digits@PAGE
@@ -601,7 +599,7 @@ gen_loop:
 
 gen_done:
     mov     w0, #0
-    strb    w0, [x23]                       // null terminate
+    strb    w0, [x23]                       // null-terminate for UTF8String
 
     // Set output field to pass_buf
     adrp    x0, pass_buf@PAGE
@@ -629,18 +627,6 @@ invalid_length:
     add     x1, x1, sel_setStringValue@PAGEOFF
     bl      send_msg1
     b       generation_exit
-
-invalid_mode:
-    adrp    x0, str_errMode@PAGE
-    add     x0, x0, str_errMode@PAGEOFF
-    bl      make_nsstring
-    mov     x2, x0
-    adrp    x9, g_outputField@PAGE
-    add     x9, x9, g_outputField@PAGEOFF
-    ldr     x0, [x9]
-    adrp    x1, sel_setStringValue@PAGE
-    add     x1, x1, sel_setStringValue@PAGEOFF
-    bl      send_msg1
 
 generation_exit:
     ldp     x23, x24, [sp], #16
@@ -985,8 +971,7 @@ str_default2:               .asciz "2"
 str_generate:               .asciz "Generate"
 str_copy:                   .asciz "Copy"
 str_empty:                  .asciz ""
-str_errLen:                 .asciz "Error: Length must be 1-64"
-str_errMode:                .asciz "Error: Mode must be 1 or 2"
+str_errLen:                 .asciz "Error: Invalid Length (1-64)"
 str_pboardType:             .asciz "public.utf8-plain-text"
 str_types:                  .asciz "v@:@"
 
